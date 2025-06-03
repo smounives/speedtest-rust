@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - '*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要发布的版本号 (例如: v1.0.0)，这将作为发布的标签名称。'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -197,12 +203,23 @@ jobs:
           ENTRYPOINT ["librespeed-rs"]
           EOF
         
+      - name: Determine Image Tag
+        id: image_tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+          
       - name: Build container image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest,ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: | 
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.image_tag.outputs.tag }}
           file: ./Containerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
 
@@ -257,14 +274,24 @@ jobs:
             md5sum_file "$file"
           done
 
+      - name: Determine Release Version # <--- 添加这个步骤
+        id: release_version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Extract release notes
         run: |
-          awk -v ver="${{ github.ref_name }}" '/^## Version / { if (p) { exit }; if ($3 == ver) { p=1; next } } p && NF' "CHANGELOG.md" > RELEASE_NOTE.txt
+          awk -v ver="${{ steps.release_version.outputs.version }}" '/^## Version / { if (p) { exit }; if ($3 == ver) { p=1; next } } p && NF' "CHANGELOG.md" > RELEASE_NOTE.txt
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Release ${{ github.ref_name }}
+          name: Release ${{ steps.release_version.outputs.version }}
+          tag_name: ${{ steps.release_version.outputs.version }}
           body_path: RELEASE_NOTE.txt
           files: |
             *.zip
